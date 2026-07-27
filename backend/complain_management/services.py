@@ -1,24 +1,30 @@
-from backend.database import async_session_local
-from .models import Complaint
-from .schemas import ComplaintCreate, ComplaintDraft, ComplaintTextRequest, ComplaintExtractionResponse
-
 import asyncio
 import io
+import json
+import re
 import uuid
 from pathlib import Path
+from typing import Literal, TypedDict
 
-from typing import TypedDict, Literal
-
+from fastapi import HTTPException, status
 from langchain_core.output_parsers import JsonOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_groq import ChatGroq
 from langgraph.graph import END, START, StateGraph
-
 from pypdf import PdfReader
+from sqlalchemy import select
 from supabase import create_client
 
 from backend.config import Config
-from backend.complain_management.models import ComplaintSource
+from backend.database import async_session_local
+from backend.complain_management.models import Complaint, RiskAssessment
+from .schemas import (
+    ComplaintCreate,
+    ComplaintDraft,
+    ComplaintExtractionResponse,
+    RiskAssessmentCreate,
+    RiskAssessmentRead,
+)
 
 
 class ComplaintInputState(TypedDict):
@@ -28,7 +34,15 @@ class ComplaintInputState(TypedDict):
     extracted_text: str
     storage_path: str | None
     complaint: dict
-    
+    current_complaint: dict | None
+    intent: str | None
+
+
+# -----------------------------------------------------------------------------
+# LLM helpers
+# -----------------------------------------------------------------------------
+
+
 def get_llm() -> ChatGroq:
     return ChatGroq(
         model=Config.GROQ_MODEL,
@@ -37,11 +51,60 @@ def get_llm() -> ChatGroq:
     )
 
 
+# -----------------------------------------------------------------------------
+# General utilities
+# -----------------------------------------------------------------------------
+
+
+def normalize_text(value: str | None) -> str:
+    if not value:
+        return ""
+
+    return re.sub(r"\s+", " ", value.strip().lower())
+
+
+def is_similar_text(a: str | None, b: str | None) -> bool:
+    a_norm = normalize_text(a)
+    b_norm = normalize_text(b)
+
+    if not a_norm or not b_norm:
+        return False
+
+    return a_norm in b_norm or b_norm in a_norm
+
+
+# -----------------------------------------------------------------------------
+# Input-routing helpers
+# -----------------------------------------------------------------------------
+
+
 def choose_input(state: ComplaintInputState) -> Literal["pdf", "text"]:
     if state["file_bytes"] is not None:
         return "pdf"
-    
+
     return "text"
+
+
+def choose_intent(state: ComplaintInputState) -> Literal["extract", "update"]:
+    current_complaint = state.get("current_complaint") or {}
+    has_existing_complaint = any(
+        (value not in (None, ""))
+        for value in current_complaint.values()
+    )
+
+    if (
+        has_existing_complaint
+        and state.get("file_bytes") is None
+        and (state.get("raw_text") or "").strip()
+    ):
+        return "update"
+
+    return "extract"
+
+
+# -----------------------------------------------------------------------------
+# PDF helpers
+# -----------------------------------------------------------------------------
 
 
 def extract_pdf_text(file_bytes: bytes) -> str:
@@ -61,25 +124,14 @@ def extract_pdf_text(file_bytes: bytes) -> str:
     return text
 
 
-async def extract_pdf_text_node(state: ComplaintInputState):
-    extracted_text = await asyncio.to_thread(
-        extract_pdf_text,
-        state["file_bytes"],
-    )
-    
-    return {"extracted_text": extracted_text}
-
 def upload_pdf_to_supabase(file_bytes: bytes, file_name: str) -> str:
     supabase = create_client(
         Config.SUPABASE_URL,
         Config.SUPABASE_SERVICE_ROLE_KEY,
     )
-    
-    safe_file_name = Path(file_name).name
 
-    storage_path = (
-        f"complaints/{uuid.uuid4()}-{safe_file_name}"
-    )
+    safe_file_name = Path(file_name).name
+    storage_path = f"complaints/{uuid.uuid4()}-{safe_file_name}"
 
     supabase.storage.from_(Config.SUPABASE_BUCKET).upload(
         path=storage_path,
@@ -92,6 +144,125 @@ def upload_pdf_to_supabase(file_bytes: bytes, file_name: str) -> str:
 
     return storage_path
 
+
+# -----------------------------------------------------------------------------
+# Database helpers
+# -----------------------------------------------------------------------------
+
+
+async def is_duplicate_complaint(complaint_data: ComplaintCreate) -> bool:
+    async with async_session_local() as session:
+        statement = select(Complaint).where(
+            Complaint.customer_name == complaint_data.customer_name,
+            Complaint.product_name == complaint_data.product_name,
+        )
+
+        if complaint_data.batch_number:
+            statement = statement.where(Complaint.batch_number == complaint_data.batch_number)
+
+        if complaint_data.complaint_type:
+            statement = statement.where(Complaint.complaint_type == complaint_data.complaint_type)
+
+        result = await session.execute(statement)
+        existing_complaints = result.scalars().all()
+
+        for existing in existing_complaints:
+            if complaint_data.complaint_description and is_similar_text(
+                complaint_data.complaint_description,
+                existing.complaint_description,
+            ):
+                return True
+
+            if complaint_data.batch_number and existing.batch_number == complaint_data.batch_number:
+                return True
+
+        return False
+
+
+async def create_complaint(complaint_data: ComplaintCreate) -> Complaint:
+    is_duplicate = await is_duplicate_complaint(complaint_data)
+
+    if is_duplicate:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Duplicate complaint detected.",
+        )
+
+    complaint = Complaint(**complaint_data.model_dump())
+
+    async with async_session_local() as session:
+        session.add(complaint)
+        await session.commit()
+        await session.refresh(complaint)
+
+    return complaint
+
+
+async def create_risk_assessment(
+    risk_data: RiskAssessmentCreate,
+    complaint_id: uuid.UUID | None = None,
+    risk_assessment_id: uuid.UUID | None = None,
+) -> RiskAssessment:
+    if complaint_id is not None:
+        risk_data = risk_data.model_copy(update={"complaint_id": complaint_id})
+
+    async with async_session_local() as session:
+        if complaint_id is not None:
+            existing_statement = select(RiskAssessment).where(
+                RiskAssessment.complaint_id == complaint_id
+            )
+            existing_result = await session.execute(existing_statement)
+            existing_ra = existing_result.scalar_one_or_none()
+
+            if existing_ra is not None:
+                for key, value in risk_data.model_dump().items():
+                    setattr(existing_ra, key, value)
+
+                session.add(existing_ra)
+                await session.commit()
+                await session.refresh(existing_ra)
+                return existing_ra
+
+        if risk_assessment_id is not None:
+            statement = select(RiskAssessment).where(RiskAssessment.id == risk_assessment_id)
+            result = await session.execute(statement)
+            ra = result.scalar_one_or_none()
+
+            if ra is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Risk assessment not found.",
+                )
+
+            for key, value in risk_data.model_dump().items():
+                setattr(ra, key, value)
+
+            session.add(ra)
+            await session.commit()
+            await session.refresh(ra)
+            return ra
+
+        ra = RiskAssessment(**risk_data.model_dump())
+        session.add(ra)
+        await session.commit()
+        await session.refresh(ra)
+        return ra
+
+
+# -----------------------------------------------------------------------------
+# Graph nodes
+# -----------------------------------------------------------------------------
+
+
+async def extract_pdf_text_node(state: ComplaintInputState):
+    extracted_text = await asyncio.to_thread(
+        extract_pdf_text,
+        state["file_bytes"],
+    )
+
+    return {"extracted_text": extracted_text}
+
+
 async def store_pdf_node(state: ComplaintInputState):
     storage_path = await asyncio.to_thread(
         upload_pdf_to_supabase,
@@ -100,6 +271,14 @@ async def store_pdf_node(state: ComplaintInputState):
     )
 
     return {"storage_path": storage_path}
+
+
+def prepare_text_node(state: ComplaintInputState):
+    return {
+        "extracted_text": state["raw_text"] or "",
+        "storage_path": None,
+    }
+
 
 async def extract_complaint_node(state: ComplaintInputState):
     parser = JsonOutputParser(pydantic_object=ComplaintDraft)
@@ -432,8 +611,8 @@ async def extract_complaint_node(state: ComplaintInputState):
                 """,
             ),
             (
-                "user", 
-                "{extracted_text}"
+                "user",
+                "{extracted_text}",
             ),
         ]
     )
@@ -452,21 +631,128 @@ async def extract_complaint_node(state: ComplaintInputState):
     return {"complaint": complaint.model_dump()}
 
 
-def prepare_text_node(state: ComplaintInputState):
-    return {
-        "extracted_text": state["raw_text"] or "",
-        "storage_path": None,
-    }
-    
+async def update_complaint_node(state: ComplaintInputState):
+    parser = JsonOutputParser(pydantic_object=ComplaintDraft)
+
+    prompt = ChatPromptTemplate.from_messages(
+        [
+            (
+                "system",
+                """
+                You are updating an existing complaint record for a Pharmaceutical Quality Management System (QMS).
+
+                Treat the current complaint as the source of truth.
+                Update ONLY the fields explicitly modified by the user.
+                Preserve every other field exactly as it is.
+                Never overwrite existing values with null unless the user explicitly asks to clear a field.
+                Never invent information.
+                If the user message is unrelated, return the complaint unchanged.
+
+                Return ONLY valid JSON matching the required schema.
+                """,
+            ),
+            (
+                "user",
+                "Current complaint:\n{current_complaint}\n\nUser message:\n{user_message}\n\nReturn the full complaint object with all fields.",
+            ),
+        ]
+    )
+
+    chain = prompt | get_llm() | parser
+
+    result = await chain.ainvoke(
+        {
+            "current_complaint": json.dumps(state.get("current_complaint") or {}, default=str),
+            "user_message": state["raw_text"] or "",
+            "format_instructions": parser.get_format_instructions(),
+        }
+    )
+
+    complaint = ComplaintDraft.model_validate(result)
+    updated_complaint = complaint.model_dump()
+    current_complaint = state.get("current_complaint") or {}
+
+    for field in ComplaintExtractionResponse.model_fields.keys():
+        if updated_complaint.get(field) in (None, ""):
+            updated_complaint[field] = current_complaint.get(field)
+
+    return {"complaint": updated_complaint}
+
+
+async def summarize_and_create_risk_assessment(complaint: dict, complaint_id: uuid.UUID | None = None,) -> RiskAssessmentRead:
+    parser = JsonOutputParser(pydantic_object=RiskAssessmentCreate)
+
+    prompt = ChatPromptTemplate.from_messages(
+        [
+            (
+                "system",
+                """
+                You are an AI assistant that summarizes a customer complaint and provides a brief initial risk assessment for a Pharmaceutical QMS.
+
+                Return ONLY valid JSON matching the schema below.
+
+                Fields:
+                - complaint_summary: A 1-3 sentence summary of the complaint.
+                - severity_suggested: One of Critical, Major, Minor (or null if unknown).
+                - suggested_next_action: Short recommended next action.
+                - initial_risk_assessment: One-paragraph initial risk assessment.
+
+                Do not invent facts. Base the summary on the provided complaint data.
+                """,
+            ),
+            (
+                "user",
+                "Complaint data:\n{complaint_json}\n\nReturn the JSON matching the schema. {format_instructions}",
+            ),
+        ]
+    )
+
+    chain = prompt | get_llm() | parser
+
+    result = await chain.ainvoke(
+        {
+            "complaint_json": json.dumps(complaint, default=str),
+            "format_instructions": parser.get_format_instructions(),
+        }
+    )
+
+    ra = RiskAssessmentCreate.model_validate(result)
+    created = await create_risk_assessment(ra, complaint_id=complaint_id)
+
+    return RiskAssessmentRead(**created.model_dump())
+
+
+async def assess_risk_node(state: ComplaintInputState):
+    complaint = state.get("complaint") or {}
+
+    try:
+        ra = await summarize_and_create_risk_assessment(complaint)
+        return {"risk_assessment": ra.model_dump()}
+    except Exception:
+        return {"risk_assessment": None}
+
+
 builder = StateGraph(ComplaintInputState)
 
+builder.add_node("decide_intent", lambda state: {"intent": choose_intent(state)})
 builder.add_node("choose_input", lambda state: {})
 builder.add_node("prepare_text", prepare_text_node)
 builder.add_node("extract_pdf_text", extract_pdf_text_node)
 builder.add_node("store_pdf", store_pdf_node)
 builder.add_node("extract_complaint", extract_complaint_node)
+builder.add_node("update_complaint", update_complaint_node)
+builder.add_node("assess_risk", assess_risk_node)
 
-builder.add_edge(START, "choose_input")
+builder.add_edge(START, "decide_intent")
+
+builder.add_conditional_edges(
+    "decide_intent",
+    choose_intent,
+    {
+        "extract": "choose_input",
+        "update": "update_complaint",
+    },
+)
 
 builder.add_conditional_edges(
     "choose_input",
@@ -480,35 +766,33 @@ builder.add_conditional_edges(
 builder.add_edge("prepare_text", "extract_complaint")
 builder.add_edge("extract_pdf_text", "store_pdf")
 builder.add_edge("store_pdf", "extract_complaint")
-builder.add_edge("extract_complaint", END)
+builder.add_edge("extract_complaint", "assess_risk")
+builder.add_edge("update_complaint", "assess_risk")
+builder.add_edge("assess_risk", END)
 
 complaint_graph = builder.compile()
 
 
-async def extract_complaint_from_input(raw_text: str | None, file_bytes: bytes | None = None, file_name: str | None = None,) -> ComplaintExtractionResponse:
+async def extract_complaint_from_input(raw_text: str | None, file_bytes: bytes | None = None, file_name: str | None = None, current_complaint: dict | None = None) -> ComplaintExtractionResponse:
     result = await complaint_graph.ainvoke(
         {
             "raw_text": raw_text,
             "file_bytes": file_bytes,
             "file_name": file_name,
+            "current_complaint": current_complaint,
         }
     )
 
     draft = ComplaintDraft.model_validate(result["complaint"])
 
+    storage_path = result.get("storage_path")
+    if storage_path is None and current_complaint:
+        storage_path = current_complaint.get("storage_path")
+
+    risk_assessment = result.get("risk_assessment")
+
     return ComplaintExtractionResponse(
         **draft.model_dump(),
-        storage_path=result.get("storage_path"),
+        storage_path=storage_path,
+        risk_assessment=risk_assessment,
     )
-
-
-
-async def create_complaint(complaint_data: ComplaintCreate) -> Complaint:
-    complaint = Complaint(**complaint_data.model_dump())
-
-    async with async_session_local() as session:
-        session.add(complaint)
-        await session.commit()
-        await session.refresh(complaint)
-
-    return complaint

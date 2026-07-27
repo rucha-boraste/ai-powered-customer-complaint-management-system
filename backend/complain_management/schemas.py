@@ -5,6 +5,7 @@ from pydantic import ConfigDict, Field
 from sqlmodel import SQLModel
 
 from .models import ComplaintSource, ComplaintType, Priority, Severity
+import uuid
 
 
 class ComplaintCreate(SQLModel):
@@ -29,6 +30,10 @@ class ComplaintRead(ComplaintCreate):
     updated_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class ComplaintSaveRequest(ComplaintCreate):
+    risk_assessment_id: uuid.UUID | None = None
     
 class ComplaintTextRequest(SQLModel):
     raw_text: str = Field(min_length=10)
@@ -51,3 +56,20 @@ class ComplaintDraft(SQLModel):
     
 class ComplaintExtractionResponse(ComplaintDraft):
     storage_path: str | None = None
+    risk_assessment: dict | None = None
+
+
+class RiskAssessmentCreate(SQLModel):
+    complaint_id: uuid.UUID | None = None
+    complaint_summary: str | None = None
+    severity_suggested: str | None = None
+    suggested_next_action: str | None = None
+    initial_risk_assessment: str | None = None
+
+
+class RiskAssessmentRead(RiskAssessmentCreate):
+    id: uuid.UUID
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)

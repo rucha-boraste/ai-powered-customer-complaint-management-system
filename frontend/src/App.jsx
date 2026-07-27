@@ -12,8 +12,8 @@ import {
 } from 'lucide-react';
 
 import { useDispatch, useSelector } from "react-redux";
-import { setComplaint, updateField, clearComplaint } from "./redux/complaintSlice";
-import { extractComplaint } from "./api/complaintApi";
+import { setComplaint, updateField, clearComplaint, setRiskAssessment, clearRiskAssessment } from "./redux/complaintSlice";
+import { extractComplaint, saveComplaint, assessComplaint } from "./api/complaintApi";
 
 export default function App() {
   const [dragActive, setDragActive] = useState(false);
@@ -39,6 +39,7 @@ export default function App() {
   const dispatch = useDispatch();
 
   const formData = useSelector((state) => state.complaint);
+  const riskAssessment = formData?.risk_assessment;
 
   const handleInputChange = (e) => {
     const { name, value } = e.target;
@@ -99,8 +100,35 @@ export default function App() {
       setIsExtracting(true);
       setExtractionProgress(10);
 
-      const data = await extractComplaint({ file: selectedFile });
+      const data = await extractComplaint({ file: selectedFile, currentComplaint: formData });
       applyExtractedData(data);
+
+      if (data.risk_assessment) {
+        dispatch(setRiskAssessment(data.risk_assessment));
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: Date.now(),
+            type: "system",
+            text: `AI Summary: ${data.risk_assessment.complaint_summary || "(no summary)"} Suggested severity: ${data.risk_assessment.severity_suggested || "N/A"}`,
+          },
+        ]);
+      } else {
+        try {
+          const assessment = await assessComplaint(data);
+          dispatch(setRiskAssessment(assessment));
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: Date.now(),
+              type: "system",
+              text: `AI Summary: ${assessment.complaint_summary || "(no summary)"} Suggested severity: ${assessment.severity_suggested || "N/A"}`,
+            },
+          ]);
+        } catch (e) {
+          // non-fatal: show nothing if assessment fails
+        }
+      }
 
       setMessages((prev) => [
         ...prev,
@@ -154,9 +182,37 @@ export default function App() {
       const data = await extractComplaint({
         rawText: messageText || undefined,
         file: activeAttachment || undefined,
+        currentComplaint: formData,
       });
 
       applyExtractedData(data);
+
+      if (data.risk_assessment) {
+        dispatch(setRiskAssessment(data.risk_assessment));
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: Date.now(),
+            type: "system",
+            text: `AI Summary: ${data.risk_assessment.complaint_summary || "(no summary)"} Suggested severity: ${data.risk_assessment.severity_suggested || "N/A"}`,
+          },
+        ]);
+      } else {
+        try {
+          const assessment = await assessComplaint(data);
+          dispatch(setRiskAssessment(assessment));
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: Date.now(),
+              type: "system",
+              text: `AI Summary: ${assessment.complaint_summary || "(no summary)"} Suggested severity: ${assessment.severity_suggested || "N/A"}`,
+            },
+          ]);
+        } catch (e) {
+          // ignore
+        }
+      }
 
       setMessages((prev) => [
         ...prev,
@@ -184,6 +240,37 @@ export default function App() {
     } finally {
       setIsExtracting(false);
       setExtractionProgress(100);
+    }
+  };
+
+  const handleSaveComplaint = async () => {
+    try {
+      const savePayload = {
+        ...formData,
+        ...(formData.risk_assessment?.id ? { risk_assessment_id: formData.risk_assessment.id } : {}),
+      };
+
+      await saveComplaint(savePayload);
+
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: Date.now(),
+          type: "system",
+          text: "Complaint saved successfully.",
+        },
+      ]);
+    } catch (error) {
+      const message = error?.response?.data?.detail || error?.message || "Unable to save complaint.";
+
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: Date.now(),
+          type: "system",
+          text: message,
+        },
+      ]);
     }
   };
 
@@ -336,6 +423,27 @@ export default function App() {
               </div>
             </div>
             
+            {/* Risk Assessment panel */}
+            {riskAssessment && (
+              <div className="border-t border-slate-200 pt-4">
+                <h3 className="text-sm font-semibold text-slate-700 mb-2">AI Risk Assessment</h3>
+                <div className="p-3 bg-indigo-50 rounded-md border border-indigo-100">
+                  <div className="flex items-start gap-4">
+                    <div className="shrink-0">
+                      <ShieldCheck className="text-indigo-600" size={20} />
+                    </div>
+                    <div>
+                      <div className="text-sm font-medium text-slate-800">Severity: <span className="font-semibold">{riskAssessment.severity_suggested || 'N/A'}</span></div>
+                      <div className="text-sm text-slate-700 mt-1">{riskAssessment.complaint_summary}</div>
+                      {riskAssessment.suggested_next_action && (
+                        <div className="text-sm text-slate-600 mt-2">Next action: {riskAssessment.suggested_next_action}</div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
             {/* Spacing for fixed footer */}
             <div className="h-3"></div>
           </div>
@@ -349,7 +457,10 @@ export default function App() {
               <RotateCcw size={16} />
               Reset Form
             </button>
-            <button className="flex items-center gap-2 px-5 py-2 text-sm font-medium text-white bg-blue-600 rounded-md hover:bg-blue-700 transition-colors shadow-sm">
+            <button
+              onClick={handleSaveComplaint}
+              className="flex items-center gap-2 px-5 py-2 text-sm font-medium text-white bg-blue-600 rounded-md hover:bg-blue-700 transition-colors shadow-sm"
+            >
               <Save size={16} />
               Save Complaint
             </button>

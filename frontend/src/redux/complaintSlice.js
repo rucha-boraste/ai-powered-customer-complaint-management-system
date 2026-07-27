@@ -15,6 +15,7 @@ const initialState = {
   initial_severity: "",
   priority: "",
   storage_path: null,
+  risk_assessment: null,
 };
 
 const complaintSlice = createSlice({
@@ -34,6 +35,12 @@ const complaintSlice = createSlice({
     clearComplaint() {
       return initialState;
     },
+    setRiskAssessment(state, action) {
+      state.risk_assessment = action.payload;
+    },
+    clearRiskAssessment(state) {
+      state.risk_assessment = null;
+    },
   },
 });
 
@@ -41,6 +48,8 @@ export const {
   setComplaint,
   updateField,
   clearComplaint,
+  setRiskAssessment,
+  clearRiskAssessment,
 } = complaintSlice.actions;
 
 export default complaintSlice.reducer;

@@ -3,7 +3,7 @@ from datetime import date, datetime
 from enum import Enum
 
 import sqlalchemy.dialects.postgresql as pg
-from sqlalchemy import Column, Date, Enum as SQLEnum, String, Text
+from sqlalchemy import Column, Date, Enum as SQLEnum, String, Text, ForeignKey
 from sqlalchemy.sql import func
 from sqlmodel import Field, SQLModel
 
@@ -161,3 +161,66 @@ class Complaint(SQLModel, table=True):
             f"customer='{self.customer_name}', "
             f"product='{self.product_name}')>"
         )
+
+
+class RiskAssessment(SQLModel, table=True):
+    __tablename__ = "risk_assessments"
+
+    id: uuid.UUID = Field(
+        default_factory=uuid.uuid4,
+        sa_column=Column(
+            pg.UUID(as_uuid=True),
+            primary_key=True,
+            nullable=False,
+        ),
+    )
+
+    complaint_id: uuid.UUID | None = Field(
+        default=None,
+        sa_column=Column(
+            pg.UUID(as_uuid=True),
+            ForeignKey("complaints.id", ondelete="CASCADE"),
+            nullable=True,
+            index=True,
+        ),
+    )
+
+    complaint_summary: str | None = Field(
+        default=None,
+        sa_column=Column(Text),
+    )
+
+    severity_suggested: str | None = Field(
+        default=None,
+        sa_column=Column(String(50)),
+    )
+
+    suggested_next_action: str | None = Field(
+        default=None,
+        sa_column=Column(Text),
+    )
+
+    initial_risk_assessment: str | None = Field(
+        default=None,
+        sa_column=Column(Text),
+    )
+
+    created_at: datetime = Field(
+        sa_column=Column(
+            pg.TIMESTAMP(timezone=True),
+            nullable=False,
+            server_default=func.now(),
+        )
+    )
+
+    updated_at: datetime = Field(
+        sa_column=Column(
+            pg.TIMESTAMP(timezone=True),
+            nullable=False,
+            server_default=func.now(),
+            onupdate=func.now(),
+        )
+    )
+
+    def __repr__(self):
+        return f"<RiskAssessment(id={self.id}, complaint_id={self.complaint_id})>"
