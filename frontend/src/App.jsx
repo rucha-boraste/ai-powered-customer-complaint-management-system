@@ -11,6 +11,10 @@ import {
   ShieldCheck
 } from 'lucide-react';
 
+import { useDispatch, useSelector } from "react-redux";
+import { setComplaint, updateField, clearComplaint } from "./redux/complaintSlice";
+import { extractComplaint } from "./api/complaintApi";
+
 export default function App() {
   const [dragActive, setDragActive] = useState(false);
   const [extractionProgress, setExtractionProgress] = useState(0);
@@ -30,29 +34,20 @@ export default function App() {
   const messagesEndRef = useRef(null);
   const chatFileInputRef = useRef(null);
 
-  // Form State
-  const [formData, setFormData] = useState({
-    complaintSource: '',
-    customerName: '',
-    productName: '',
-    productStrength: '',
-    batchNumber: '',
-    mfgDate: '',
-    expiryDate: '',
-    quantityAffected: '',
-    complaintType: '',
-    complaintDate: '',
-    description: '',
-    severity: '',
-    priority: ''
-  });
-
   const [extractedFields, setExtractedFields] = useState({});
+
+  const dispatch = useDispatch();
+
+  const formData = useSelector((state) => state.complaint);
 
   const handleInputChange = (e) => {
     const { name, value } = e.target;
-    setFormData(prev => ({ ...prev, [name]: value }));
-    // If user manually edits an extracted field, clear the highlight
+    dispatch(
+        updateField({
+            field: name,
+            value,
+        })
+    );
     if (extractedFields[name]) {
       setExtractedFields(prev => ({ ...prev, [name]: false }));
     }
@@ -84,96 +79,117 @@ export default function App() {
     }
   };
 
-  const handleFile = (selectedFile) => {
-    setFile(selectedFile);
-    simulateExtraction(selectedFile.name);
+  const applyExtractedData = (data) => {
+    dispatch(setComplaint(data));
+
+    const extractedFlags = {};
+    Object.keys(data).forEach((key) => {
+      if (data[key] !== null && data[key] !== "") {
+        extractedFlags[key] = true;
+      }
+    });
+
+    setExtractedFields(extractedFlags);
   };
 
-  const simulateExtraction = (sourceName) => {
-    setIsExtracting(true);
-    setExtractionProgress(10);
-    
-    // Simulate multi-step extraction
-    setTimeout(() => setExtractionProgress(35), 1000);
-    setTimeout(() => setExtractionProgress(70), 2000);
-    
-    setTimeout(() => {
-      setExtractionProgress(100);
-      setTimeout(() => setIsExtracting(false), 500);
-      
-      // Mock extracted data
-      const mockData = {
-        complaintSource: 'Email',
-        customerName: 'MediCorp Health Systems',
-        productName: 'Amoxicillin Trihydrate',
-        productStrength: '500mg',
-        batchNumber: 'AMX-2023-B452',
-        mfgDate: '2023-05-12',
-        expiryDate: '2025-04-30',
-        quantityAffected: '5000',
-        complaintType: 'Packaging Defect',
-        complaintDate: '2023-11-20',
-        description: `Customer reported that upon receiving shipment PO#98234, approximately 10% of the blister packs in batch AMX-2023-B452 were found to be improperly sealed. The foil backing was partially detached on several strips, potentially compromising product integrity. Requested immediate investigation and replacement of affected stock.`,
-        severity: 'Major',
-        priority: 'High'
-      };
+  const handleFile = async (selectedFile) => {
+    setFile(selectedFile);
 
-      setFormData(mockData);
-      
-      // Mark fields that were extracted
-      const extractedFlags = {};
-      Object.keys(mockData).forEach(key => {
-        extractedFlags[key] = true;
-      });
-      setExtractedFields(extractedFlags);
+    try {
+      setIsExtracting(true);
+      setExtractionProgress(10);
 
-      setMessages(prev => [
+      const data = await extractComplaint({ file: selectedFile });
+      applyExtractedData(data);
+
+      setMessages((prev) => [
         ...prev,
         {
           id: Date.now(),
-          type: 'system',
-          text: `Successfully extracted details from "${sourceName}". Please review the populated fields and verify the information.`
-        }
+          type: "system",
+          text: `Successfully extracted complaint details from "${selectedFile.name}". Please review the populated form.`,
+        },
       ]);
-    }, 3500);
+    } catch (error) {
+      const message = error?.response?.data?.detail || error?.message || "Failed to extract complaint details.";
+
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: Date.now(),
+          type: "system",
+          text: message,
+        },
+      ]);
+    } finally {
+      setIsExtracting(false);
+      setExtractionProgress(100);
+    }
   };
 
-  const handleSendMessage = (e) => {
+  const handleSendMessage = async (e) => {
     e.preventDefault();
-    if (!chatInput.trim() && !chatAttachment) return;
 
-    const newMsgText = chatAttachment ? `[Attached: ${chatAttachment.name}] ${chatInput}` : chatInput;
+    const messageText = chatInput.trim();
+    const activeAttachment = chatAttachment;
 
-    setMessages(prev => [...prev, { id: Date.now(), type: 'user', text: newMsgText }]);
-    setChatInput('');
-    setChatAttachment(null);
+    if (!messageText && !activeAttachment) {
+      return;
+    }
 
-    // Simulate AI response
-    setTimeout(() => {
-      setMessages(prev => [...prev, { 
-        id: Date.now(), 
-        type: 'system', 
-        text: 'I understand. I have noted that detail. Would you like me to update the form with this new information?' 
-      }]);
-    }, 1000);
+    setMessages((prev) => [
+      ...prev,
+      {
+        id: Date.now(),
+        type: "user",
+        text: messageText || `Attached file: ${activeAttachment.name}`,
+      },
+    ]);
+
+    setChatInput("");
+    setIsExtracting(true);
+    setExtractionProgress(10);
+
+    try {
+      const data = await extractComplaint({
+        rawText: messageText || undefined,
+        file: activeAttachment || undefined,
+      });
+
+      applyExtractedData(data);
+
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: Date.now(),
+          type: "system",
+          text: activeAttachment
+            ? `Extracted complaint details from "${activeAttachment.name}".`
+            : "Extracted complaint details from your message.",
+        },
+      ]);
+
+      setChatAttachment(null);
+    } catch (error) {
+      const message = error?.response?.data?.detail || error?.message || "Unable to extract complaint details.";
+
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: Date.now(),
+          type: "system",
+          text: message,
+        },
+      ]);
+    } finally {
+      setIsExtracting(false);
+      setExtractionProgress(100);
+    }
   };
 
   const handleReset = () => {
-    setFormData({
-      complaintSource: '',
-      customerName: '',
-      productName: '',
-      productStrength: '',
-      batchNumber: '',
-      mfgDate: '',
-      expiryDate: '',
-      quantityAffected: '',
-      complaintType: '',
-      complaintDate: '',
-      description: '',
-      severity: '',
-      priority: ''
-    });
+    dispatch(clearComplaint());
+
     setExtractedFields({});
     setFile(null);
     setExtractionProgress(0);
@@ -268,8 +284,8 @@ export default function App() {
                 <h2 className="text-xs font-bold text-slate-500 tracking-wide uppercase">Origin & Customer Details</h2>
               </div>
               <div className="grid grid-cols-2 gap-4">
-                <InputField name="complaintSource" label="Complaint Source" placeholder="Awaiting AI extraction..." type="select" options={['Email', 'Phone', 'Web Portal', 'Direct Mail']} />
-                <InputField name="customerName" label="Customer Name" placeholder="Awaiting AI extraction..." />
+                <InputField name="complaint_source" label="Complaint Source" placeholder="Awaiting AI extraction..." type="select" options={['Email', 'Phone', 'Web Portal', 'Direct Mail']} />
+                <InputField name="customer_name" label="Customer Name" placeholder="Awaiting AI extraction..." />
               </div>
             </div>
 
@@ -280,15 +296,15 @@ export default function App() {
                 <h2 className="text-xs font-bold text-slate-500 tracking-wide uppercase">Product & Batch Identification</h2>
               </div>
               <div className="grid grid-cols-2 gap-4">
-                <InputField name="productName" label="Product Name" placeholder="Awaiting AI extraction..." />
-                <InputField name="productStrength" label="Product Strength/Grade" placeholder="Awaiting AI extraction..." />
-                <InputField name="batchNumber" label="Batch/Lot Number" placeholder="Awaiting AI extraction..." />
-                <InputField name="mfgDate" label="Manufacturing Date" type="date" placeholder="Awaiting AI extraction..." />
-                <InputField name="expiryDate" label="Expiry Date" type="date" placeholder="Awaiting AI extraction..." />
+                <InputField name="product_name" label="Product Name" placeholder="Awaiting AI extraction..." />
+                <InputField name="product_strength" label="Product Strength/Grade" placeholder="Awaiting AI extraction..." />
+                <InputField name="batch_number" label="Batch/Lot Number" placeholder="Awaiting AI extraction..." />
+                <InputField name="manufacturing_date" label="Manufacturing Date" type="date" placeholder="Awaiting AI extraction..." />
+                <InputField name="expiry_date" label="Expiry Date" type="date" placeholder="Awaiting AI extraction..." />
                 <div className="col-span-1 flex flex-col gap-1.5">
                    <label className="text-xs font-semibold text-slate-700">Quantity Affected</label>
                    <div className="relative flex items-center">
-                      <input type="text" name="quantityAffected" value={formData.quantityAffected} onChange={handleInputChange} placeholder="Awaiting AI extraction..." className={`h-9 w-full px-2.5 pr-8 text-sm rounded-md border ${extractedFields.quantityAffected ? 'border-indigo-300 bg-indigo-50/30' : 'border-slate-200 bg-slate-50'} focus:ring-1 focus:ring-blue-500 outline-none`} />
+                      <input type="text" name="quantity_affected" value={formData.quantity_affected} onChange={handleInputChange} placeholder="Awaiting AI extraction..." className={`h-9 w-full px-2.5 pr-8 text-sm rounded-md border ${extractedFields.quantity_affected ? 'border-indigo-300 bg-indigo-50/30' : 'border-slate-200 bg-slate-50'} focus:ring-1 focus:ring-blue-500 outline-none`} />
                       <span className="absolute right-3 text-slate-400 text-sm">kg</span>
                    </div>
                 </div>
@@ -302,9 +318,9 @@ export default function App() {
                 <h2 className="text-xs font-bold text-slate-500 tracking-wide uppercase">Complaint Details</h2>
               </div>
               <div className="grid grid-cols-2 gap-4">
-                <InputField name="complaintType" label="Complaint Type" type="select" placeholder="Awaiting AI extraction..." options={['Packaging Defect', 'Product Quality', 'Adverse Event', 'Labeling Issue', 'Logistics']} />
-                <InputField name="complaintDate" label="Complaint Date" type="date" placeholder="Awaiting AI extraction..." />
-                <InputField name="description" label="Detailed Complaint Description" type="textarea" placeholder="Awaiting AI extraction..." span={2} />
+                <InputField name="complaint_type" label="Complaint Type" type="select" placeholder="Awaiting AI extraction..." options={['Packaging Defect', 'Product Quality', 'Adverse Event', 'Labeling Issue', 'Logistics']} />
+                <InputField name="complaint_date" label="Complaint Date" type="date" placeholder="Awaiting AI extraction..." />
+                <InputField name="complaint_description" label="Detailed Complaint Description" type="textarea" placeholder="Awaiting AI extraction..." span={2} />
               </div>
             </div>
 
@@ -315,7 +331,7 @@ export default function App() {
                 <h2 className="text-xs font-bold text-slate-500 tracking-wide uppercase">Initial Assessment & Priority</h2>
               </div>
               <div className="grid grid-cols-2 gap-4">
-                <InputField name="severity" label="Initial Severity" type="select" placeholder="Awaiting AI extraction..." options={['Critical', 'Major', 'Minor']} />
+                <InputField name="initial_severity" label="Initial Severity" type="select" placeholder="Awaiting AI extraction..." options={['Critical', 'Major', 'Minor']} />
                 <InputField name="priority" label="Priority" type="select" placeholder="Awaiting AI extraction..." options={['High', 'Medium', 'Low']} />
               </div>
             </div>
