@@ -54,25 +54,6 @@ export default function App() {
     }
   };
 
-  const handleDrag = (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    if (e.type === "dragenter" || e.type === "dragover") {
-      setDragActive(true);
-    } else if (e.type === "dragleave") {
-      setDragActive(false);
-    }
-  };
-
-  const handleDrop = (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setDragActive(false);
-    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
-      handleFile(e.dataTransfer.files[0]);
-    }
-  };
-
   const handleChange = (e) => {
     e.preventDefault();
     if (e.target.files && e.target.files[0]) {
@@ -355,10 +336,6 @@ export default function App() {
           <div className="p-5 sm:p-6 pb-4 border-b border-slate-200 flex justify-between items-start sticky top-0 bg-white z-10">
             <div>
               <h1 className="text-[22px] font-bold leading-none tracking-tight text-slate-800">Log Customer Complaint</h1>
-              <p className="text-sm text-slate-500 mt-1.5">API &amp; FDF Quality Assurance Module</p>
-            </div>
-            <div className="px-3 py-1.5 bg-white text-amber-700 text-sm font-semibold rounded-md border border-amber-300">
-              Pending Triage
             </div>
           </div>
 
@@ -482,33 +459,6 @@ export default function App() {
           </div>
 
           <div className="flex-1 overflow-y-auto p-5 space-y-6 custom-scrollbar">
-            <section>
-              <div
-                onDragEnter={handleDrag}
-                onDragLeave={handleDrag}
-                onDragOver={handleDrag}
-                onDrop={handleDrop}
-                className={`rounded-2xl border-2 border-dashed p-5 text-center transition-all ${
-                  dragActive ? 'border-indigo-500 bg-indigo-50 scale-[1.01]' : 'border-indigo-100 bg-white hover:border-indigo-300 hover:bg-indigo-50/40'
-                }`}
-              >
-                <input ref={fileInputRef} type="file" className="hidden" onChange={handleChange} accept=".pdf,.doc,.docx,.txt,.png,.jpg,.jpeg" />
-                <div className="mx-auto mb-3 flex h-11 w-11 items-center justify-center rounded-xl bg-indigo-100 text-indigo-600">
-                  <UploadCloud size={22} />
-                </div>
-                <p className="text-sm font-bold text-slate-700">{file ? file.name : 'Drop a complaint document here'}</p>
-                <p className="mt-1 text-xs text-slate-400">PDF, Word, text, or image files</p>
-                <button onClick={() => fileInputRef.current?.click()} className="mt-3 text-xs font-bold text-indigo-600 hover:text-indigo-800">
-                  Browse files
-                </button>
-                {isExtracting && (
-                  <div className="mt-4">
-                    <div className="mb-1.5 flex justify-between text-[11px] font-semibold text-indigo-600"><span>Extracting details</span><span>{extractionProgress}%</span></div>
-                    <div className="h-1.5 overflow-hidden rounded-full bg-indigo-100"><div className="h-full rounded-full bg-indigo-600 transition-all duration-500" style={{ width: `${extractionProgress}%` }} /></div>
-                  </div>
-                )}
-              </div>
-            </section>
             
             {/* AI Assistant Chat Section */}
             <div>

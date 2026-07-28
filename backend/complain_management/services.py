@@ -126,28 +126,31 @@ def upload_pdf_to_supabase(file_bytes: bytes, file_name: str) -> str:
 
 async def is_duplicate_complaint(complaint_data: ComplaintCreate) -> bool:
     async with async_session_local() as session:
-        statement = select(Complaint).where(
-            Complaint.customer_name == complaint_data.customer_name,
-            Complaint.product_name == complaint_data.product_name,
-        )
+        statement = select(Complaint)
 
         if complaint_data.batch_number:
             statement = statement.where(Complaint.batch_number == complaint_data.batch_number)
-
-        if complaint_data.complaint_type:
-            statement = statement.where(Complaint.complaint_type == complaint_data.complaint_type)
+        else:
+            # no batch number to anchor on — fall back to product name only
+            statement = statement.where(Complaint.product_name == complaint_data.product_name)
 
         result = await session.execute(statement)
         existing_complaints = result.scalars().all()
 
         for existing in existing_complaints:
+            same_customer = is_similar_text(complaint_data.customer_name, existing.customer_name)
+            same_product = is_similar_text(complaint_data.product_name, existing.product_name)
+
+            if not (same_customer and same_product):
+                continue
+
+            if complaint_data.batch_number and existing.batch_number == complaint_data.batch_number:
+                return True
+
             if complaint_data.complaint_description and is_similar_text(
                 complaint_data.complaint_description,
                 existing.complaint_description,
             ):
-                return True
-
-            if complaint_data.batch_number and existing.batch_number == complaint_data.batch_number:
                 return True
 
         return False
