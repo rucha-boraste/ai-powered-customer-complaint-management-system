@@ -23,7 +23,6 @@ from .schemas import (
     ComplaintDraft,
     ComplaintExtractionResponse,
     RiskAssessmentCreate,
-    RiskAssessmentRead,
 )
 
 

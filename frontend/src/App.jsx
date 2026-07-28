@@ -81,7 +81,10 @@ export default function App() {
       setIsExtracting(true);
       setExtractionProgress(10);
 
-      const data = await extractComplaint({ file: selectedFile, currentComplaint: formData });
+      const data = await extractComplaint({ 
+        file: selectedFile, 
+        currentComplaint: formData 
+      });
       applyExtractedData(data);
 
       if (data.risk_assessment) {
@@ -516,7 +519,6 @@ export default function App() {
                   if (e.target.files && e.target.files[0]) {
                     setChatAttachment(e.target.files[0]);
                   }
-                  // Reset input value to allow selecting the same file again if removed
                   e.target.value = '';
                 }}
               />
