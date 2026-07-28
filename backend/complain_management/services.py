@@ -38,23 +38,12 @@ class ComplaintInputState(TypedDict):
     intent: str | None
 
 
-# -----------------------------------------------------------------------------
-# LLM helpers
-# -----------------------------------------------------------------------------
-
-
 def get_llm() -> ChatGroq:
     return ChatGroq(
         model=Config.GROQ_MODEL,
         api_key=Config.GROQ_API_KEY,
         temperature=0,
     )
-
-
-# -----------------------------------------------------------------------------
-# General utilities
-# -----------------------------------------------------------------------------
-
 
 def normalize_text(value: str | None) -> str:
     if not value:
@@ -71,11 +60,6 @@ def is_similar_text(a: str | None, b: str | None) -> bool:
         return False
 
     return a_norm in b_norm or b_norm in a_norm
-
-
-# -----------------------------------------------------------------------------
-# Input-routing helpers
-# -----------------------------------------------------------------------------
 
 
 def choose_input(state: ComplaintInputState) -> Literal["pdf", "text"]:
@@ -100,11 +84,6 @@ def choose_intent(state: ComplaintInputState) -> Literal["extract", "update"]:
         return "update"
 
     return "extract"
-
-
-# -----------------------------------------------------------------------------
-# PDF helpers
-# -----------------------------------------------------------------------------
 
 
 def extract_pdf_text(file_bytes: bytes) -> str:
@@ -143,11 +122,6 @@ def upload_pdf_to_supabase(file_bytes: bytes, file_name: str) -> str:
     )
 
     return storage_path
-
-
-# -----------------------------------------------------------------------------
-# Database helpers
-# -----------------------------------------------------------------------------
 
 
 async def is_duplicate_complaint(complaint_data: ComplaintCreate) -> bool:
@@ -249,11 +223,7 @@ async def create_risk_assessment(
         return ra
 
 
-# -----------------------------------------------------------------------------
-# Graph nodes
-# -----------------------------------------------------------------------------
-
-
+#Graph Nodes
 async def extract_pdf_text_node(state: ComplaintInputState):
     extracted_text = await asyncio.to_thread(
         extract_pdf_text,
@@ -678,16 +648,6 @@ async def update_complaint_node(state: ComplaintInputState):
 
     return {"complaint": updated_complaint}
 
-
-# async def summarize_and_create_risk_assessment(complaint: dict, complaint_id: uuid.UUID | None = None,) -> RiskAssessmentRead:
-#     parser = JsonOutputParser(pydantic_object=RiskAssessmentCreate)
-
-    
-
-#     ra = RiskAssessmentCreate.model_validate(result)
-#     created = await create_risk_assessment(ra, complaint_id=complaint_id)
-
-#     return RiskAssessmentRead(**created.model_dump())
 
 async def summarize_risk_assessment(complaint: dict,) -> RiskAssessmentCreate:
 
