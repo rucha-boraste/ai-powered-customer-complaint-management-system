@@ -143,11 +143,3 @@ npm run dev
 **`complaints`** — customer/product/batch details, complaint type, dates, description, initial severity, priority.
 
 **`risk_assessments`** — `complaint_id` (FK, cascade delete), AI-generated summary, suggested severity, suggested next action, initial risk narrative. One risk assessment per complaint.
-
----
-
-## Notes / Known Limitations
-
-- PDF extraction requires a text layer — scanned/image-only PDFs are not OCR'd
-- Risk assessment is best-effort: if the LLM call fails, complaint extraction still succeeds and returns without a risk assessment
-- AI-suggested fields (severity, priority, extracted values) are meant for human review before saving, not automatic submission
