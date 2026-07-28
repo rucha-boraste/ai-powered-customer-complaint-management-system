@@ -679,36 +679,47 @@ async def update_complaint_node(state: ComplaintInputState):
     return {"complaint": updated_complaint}
 
 
-async def summarize_and_create_risk_assessment(complaint: dict, complaint_id: uuid.UUID | None = None,) -> RiskAssessmentRead:
+# async def summarize_and_create_risk_assessment(complaint: dict, complaint_id: uuid.UUID | None = None,) -> RiskAssessmentRead:
+#     parser = JsonOutputParser(pydantic_object=RiskAssessmentCreate)
+
+    
+
+#     ra = RiskAssessmentCreate.model_validate(result)
+#     created = await create_risk_assessment(ra, complaint_id=complaint_id)
+
+#     return RiskAssessmentRead(**created.model_dump())
+
+async def summarize_risk_assessment(complaint: dict,) -> RiskAssessmentCreate:
+
     parser = JsonOutputParser(pydantic_object=RiskAssessmentCreate)
 
     prompt = ChatPromptTemplate.from_messages(
-        [
-            (
-                "system",
-                """
-                You are an AI assistant that summarizes a customer complaint and provides a brief initial risk assessment for a Pharmaceutical QMS.
-
-                Return ONLY valid JSON matching the schema below.
-
-                Fields:
-                - complaint_summary: A 1-3 sentence summary of the complaint.
-                - severity_suggested: One of Critical, Major, Minor (or null if unknown).
-                - suggested_next_action: Short recommended next action.
-                - initial_risk_assessment: One-paragraph initial risk assessment.
-
-                Do not invent facts. Base the summary on the provided complaint data.
-                """,
-            ),
-            (
-                "user",
-                "Complaint data:\n{complaint_json}\n\nReturn the JSON matching the schema. {format_instructions}",
-            ),
-        ]
-    )
-
+            [
+                (
+                    "system",
+                    """
+                    You are an AI assistant that summarizes a customer complaint and provides a brief initial risk assessment for a Pharmaceutical QMS.
+    
+                    Return ONLY valid JSON matching the schema below.
+    
+                    Fields:
+                    - complaint_summary: A 1-3 sentence summary of the complaint.
+                    - severity_suggested: One of Critical, Major, Minor (or null if unknown).
+                    - suggested_next_action: Short recommended next action.
+                    - initial_risk_assessment: One-paragraph initial risk assessment.
+    
+                    Do not invent facts. Base the summary on the provided complaint data.
+                    """,
+                ),
+                (
+                    "user",
+                    "Complaint data:\n{complaint_json}\n\nReturn the JSON matching the schema. {format_instructions}",
+                ),
+            ]
+        )
+    
     chain = prompt | get_llm() | parser
-
+    
     result = await chain.ainvoke(
         {
             "complaint_json": json.dumps(complaint, default=str),
@@ -716,17 +727,13 @@ async def summarize_and_create_risk_assessment(complaint: dict, complaint_id: uu
         }
     )
 
-    ra = RiskAssessmentCreate.model_validate(result)
-    created = await create_risk_assessment(ra, complaint_id=complaint_id)
-
-    return RiskAssessmentRead(**created.model_dump())
-
+    return RiskAssessmentCreate.model_validate(result)
 
 async def assess_risk_node(state: ComplaintInputState):
     complaint = state.get("complaint") or {}
 
     try:
-        ra = await summarize_and_create_risk_assessment(complaint)
+        ra = await summarize_risk_assessment(complaint)
         return {"risk_assessment": ra.model_dump()}
     except Exception:
         return {"risk_assessment": None}

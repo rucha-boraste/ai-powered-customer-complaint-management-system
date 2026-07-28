@@ -17,7 +17,7 @@ from .schemas import (
 from .services import (
     create_complaint,
     extract_complaint_from_input,
-    summarize_and_create_risk_assessment,
+    summarize_risk_assessment,
     create_risk_assessment,
 )
 
@@ -91,18 +91,21 @@ async def add_complaint(complaint_data: ComplaintSaveRequest):
     )
 
     complaint = await create_complaint(complaint_payload)
-
-    if complaint_data.risk_assessment_id:
+    print("risk_assessment =", complaint_data.risk_assessment)
+    
+    if complaint_data.risk_assessment:
+        print("Creating risk assessment...")
         await create_risk_assessment(
-            RiskAssessmentCreate(complaint_id=complaint.id),
+            complaint_data.risk_assessment,
             complaint_id=complaint.id,
-            risk_assessment_id=complaint_data.risk_assessment_id,
         )
+    else:
+        print("No risk assessment received!")
 
     return complaint
 
 
-@router.post("/assess", response_model=RiskAssessmentRead)
+@router.post("/assess", response_model=RiskAssessmentCreate)
 async def assess_complaint(complaint: ComplaintDraft):
     # Accept the extracted complaint draft and ask the LLM to summarize and assess risk
-    return await summarize_and_create_risk_assessment(complaint.model_dump())
+    return await summarize_risk_assessment(complaint.model_dump())

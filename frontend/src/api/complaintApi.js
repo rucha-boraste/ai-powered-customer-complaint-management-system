@@ -32,7 +32,7 @@ export const saveComplaint = async (complaintData = {}) => {
     "storage_path",
   ]);
 
-  const { risk_assessment, ...rest } = complaintData;
+  const { risk_assessment, risk_assessment_id, ...rest } = complaintData;
 
   const payload = Object.entries(rest).reduce((acc, [key, value]) => {
     if (value === "" && optionalFields.has(key)) {
@@ -44,8 +44,8 @@ export const saveComplaint = async (complaintData = {}) => {
     return acc;
   }, {});
 
-  if (risk_assessment?.id) {
-    payload.risk_assessment_id = risk_assessment.id;
+  if (risk_assessment) {
+    payload.risk_assessment = risk_assessment;
   }
 
   const response = await api.post("/complaints/save", payload);

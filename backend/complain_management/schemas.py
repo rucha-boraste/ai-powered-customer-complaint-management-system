@@ -30,10 +30,6 @@ class ComplaintRead(ComplaintCreate):
     updated_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
-
-
-class ComplaintSaveRequest(ComplaintCreate):
-    risk_assessment_id: uuid.UUID | None = None
     
 class ComplaintTextRequest(SQLModel):
     raw_text: str = Field(min_length=10)
@@ -73,3 +69,6 @@ class RiskAssessmentRead(RiskAssessmentCreate):
     updated_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
+    
+class ComplaintSaveRequest(ComplaintCreate):
+    risk_assessment: RiskAssessmentCreate | None = None
